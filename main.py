@@ -71,29 +71,35 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
 
-        # Don't rate-limit CORS preflight requests
+        # Never rate-limit CORS preflight requests
         if request.method == "OPTIONS":
             return await call_next(request)
 
         client = request.headers.get("X-Client-Id", "default")
-
         now = time.time()
 
-        if client not in rate_store:
-            rate_store[client] = []
+        bucket = rate_store.get(client)
 
-        rate_store[client] = [
-            t for t in rate_store[client]
-            if now - t < WINDOW
-        ]
+        if bucket is None:
+            bucket = {
+                "start": now,
+                "count": 0
+            }
+            rate_store[client] = bucket
 
-        if len(rate_store[client]) >= RATE_LIMIT:
+        # Fixed 10-second window
+        if now - bucket["start"] >= WINDOW:
+            bucket["start"] = now
+            bucket["count"] = 0
+
+        # Limit reached
+        if bucket["count"] >= RATE_LIMIT:
             return JSONResponse(
                 status_code=429,
                 content={"detail": "Rate limit exceeded"}
             )
 
-        rate_store[client].append(now)
+        bucket["count"] += 1
 
         return await call_next(request)
 

@@ -18,18 +18,16 @@ EMAIL = "23f1000744@ds.study.iitm.ac.in"
 # CORS
 # ===========================
 
-ALLOWED_ORIGINS = [
-    "https://app-j19z3r.example.com",
-    "https://exam.sanand.workers.dev",
-]
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=False,
-    allow_methods=["*"],
+    allow_origins=[
+        "https://app-j19z3r.example.com",
+        "https://exam.sanand.workers.dev",
+    ],
+    allow_methods=["GET", "OPTIONS"],
     allow_headers=["*"],
     expose_headers=["X-Request-ID"],
+    allow_credentials=False,
 )
 
 # ===========================
@@ -73,6 +71,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
 
+        # Don't rate-limit CORS preflight requests
+        if request.method == "OPTIONS":
+            return await call_next(request)
+
         client = request.headers.get("X-Client-Id", "default")
 
         now = time.time()
@@ -88,15 +90,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if len(rate_store[client]) >= RATE_LIMIT:
             return JSONResponse(
                 status_code=429,
-                content={
-                    "detail": "Rate limit exceeded"
-                }
+                content={"detail": "Rate limit exceeded"}
             )
 
         rate_store[client].append(now)
 
         return await call_next(request)
-
 
 app.add_middleware(RateLimitMiddleware)
 

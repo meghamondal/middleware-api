@@ -75,7 +75,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if request.method == "OPTIONS":
             return await call_next(request)
 
-        client = request.headers.get("X-Client-Id", "default")
+        client = (
+            request.headers.get("X-Client-Id")
+            or request.headers.get("x-client-id")
+            or "default"
+            )
         now = time.time()
 
         bucket = rate_store.get(client)
@@ -122,4 +126,11 @@ async def ping(
     return {
         "email": EMAIL,
         "request_id": request.state.request_id
+    }
+
+@app.get("/debug")
+async def debug(request: Request):
+    return {
+        "headers": dict(request.headers),
+        "rate_store": rate_store,
     }

@@ -5,18 +5,15 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 import uuid
 import time
+import asyncio
 
 app = FastAPI()
 
-# ===========================
-# CHANGE THIS TO YOUR EMAIL
-# ===========================
-
 EMAIL = "23f1000744@ds.study.iitm.ac.in"
 
-# ===========================
+# ==================================================
 # CORS
-# ===========================
+# ==================================================
 
 app.add_middleware(
     CORSMiddleware,
@@ -24,26 +21,17 @@ app.add_middleware(
         "https://app-j19z3r.example.com",
         "https://exam.sanand.workers.dev",
     ],
+    allow_credentials=False,
     allow_methods=["GET", "OPTIONS"],
     allow_headers=["*"],
     expose_headers=["X-Request-ID"],
-    allow_credentials=False,
 )
 
-# ===========================
-# Rate Limiter
-# ===========================
+# ==================================================
+# Request ID Middleware
+# ==================================================
 
-RATE_LIMIT = 14
-WINDOW = 10
-
-rate_store = {}
-
-# ===========================
-# Request Context Middleware
-# ===========================
-
-class RequestContextMiddleware(BaseHTTPMiddleware):
+class RequestIDMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
 
@@ -61,76 +49,76 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         return response
 
 
-app.add_middleware(RequestContextMiddleware)
+app.add_middleware(RequestIDMiddleware)
 
-# ===========================
-# Rate Limit Middleware
-# ===========================
+# ==================================================
+# Rate Limiter
+# ==================================================
 
-class RateLimitMiddleware(BaseHTTPMiddleware):
+RATE_LIMIT = 14
+WINDOW = 10
 
-    async def dispatch(self, request: Request, call_next):
+rate_store = {}
+rate_lock = asyncio.Lock()
 
-        # Never rate-limit CORS preflight requests
-        if request.method == "OPTIONS":
-            return await call_next(request)
 
-        client = (
-            request.headers.get("X-Client-Id")
-            or request.headers.get("x-client-id")
-            or "default"
-            )
-        now = time.time()
+async def check_rate_limit(client_id: str):
 
-        bucket = rate_store.get(client)
+    now = time.time()
+
+    async with rate_lock:
+
+        bucket = rate_store.get(client_id)
 
         if bucket is None:
             bucket = {
                 "start": now,
                 "count": 0
             }
-            rate_store[client] = bucket
+            rate_store[client_id] = bucket
 
-        # Fixed 10-second window
+        # reset after WINDOW seconds
         if now - bucket["start"] >= WINDOW:
             bucket["start"] = now
             bucket["count"] = 0
 
-        # Limit reached
         if bucket["count"] >= RATE_LIMIT:
-            return JSONResponse(
-                status_code=429,
-                content={"detail": "Rate limit exceeded"}
-            )
+            return False
 
         bucket["count"] += 1
 
-        return await call_next(request)
+        return True
 
-app.add_middleware(RateLimitMiddleware)
 
-# ===========================
+# ==================================================
 # Endpoint
-# ===========================
+# ==================================================
 
-from fastapi import Header
+@app.options("/ping")
+async def options_ping():
+    return JSONResponse(content={})
+
 
 @app.get("/ping")
-async def ping(
-    request: Request,
-    x_request_id: str | None = Header(None, alias="X-Request-ID")
-):
-    if x_request_id:
-        request.state.request_id = x_request_id
+async def ping(request: Request):
+
+    client_id = (
+        request.headers.get("X-Client-Id")
+        or request.headers.get("x-client-id")
+        or "default"
+    )
+
+    allowed = await check_rate_limit(client_id)
+
+    if not allowed:
+        return JSONResponse(
+            status_code=429,
+            content={
+                "detail": "Rate limit exceeded"
+            }
+        )
 
     return {
         "email": EMAIL,
         "request_id": request.state.request_id
-    }
-
-@app.get("/debug")
-async def debug(request: Request):
-    return {
-        "headers": dict(request.headers),
-        "rate_store": rate_store,
     }
